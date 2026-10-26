@@ -204,3 +204,77 @@ async fn an_oversized_active_image_is_not_silently_discarded_or_sent() {
     assert!(provider.requests.lock().unwrap().is_empty());
     assert!(matches!(engine.messages[0].content[0], ContentBlock::Image { .. }));
 }
+
+#[tokio::test]
+async fn compaction_inside_a_tool_loop_keeps_exact_user_images_and_latest_complete_pair() {
+    let provider = Arc::new(BudgetProvider::default());
+    let mut engine = engine(provider.clone(), 2 * 1024 * 1024);
+    let user = Message::new(
+        Role::User,
+        vec![ContentBlock::Text {
+            text: "EXACT instruction".into(),
+        }],
+    );
+    let call = |id: &str| {
+        Message::new(
+            Role::Assistant,
+            vec![ContentBlock::ToolUse {
+                id: id.into(),
+                name: "Read".into(),
+                input: serde_json::json!({}),
+                extra: None,
+            }],
+        )
+    };
+    let result = |id: &str| {
+        Message::new(
+            Role::User,
+            vec![ContentBlock::ToolResult {
+                tool_use_id: id.into(),
+                content: "observed".into(),
+                is_error: false,
+            }],
+        )
+    };
+    let mut older = result("old");
+    older.content.push(ContentBlock::Image {
+        image_url: ImageUrl {
+            url: "data:image/png;base64,AAAA".into(),
+        },
+    });
+    engine.messages = vec![user, call("old"), older, call("latest"), result("latest")];
+    for m in &mut engine.messages {
+        m.turn_id = Some("active".into());
+    }
+    engine.current_turn_id = Some("active".into());
+    engine.run_compaction_with_force(true).await.unwrap();
+    let blocks: Vec<_> = engine.messages.iter().flat_map(|m| &m.content).collect();
+    assert!(
+        blocks
+            .iter()
+            .any(|b| matches!(b,ContentBlock::Text{text} if text=="EXACT instruction"))
+    );
+    assert_eq!(
+        blocks
+            .iter()
+            .filter(|b| matches!(b, ContentBlock::Image { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        blocks
+            .iter()
+            .any(|b| matches!(b,ContentBlock::ToolUse{id,..} if id=="latest"))
+    );
+    assert!(
+        blocks
+            .iter()
+            .any(|b| matches!(b,ContentBlock::ToolResult{tool_use_id,..} if tool_use_id=="latest"))
+    );
+    assert!(
+        !blocks
+            .iter()
+            .any(|b| matches!(b,ContentBlock::ToolResult{tool_use_id,..} if tool_use_id=="old"))
+    );
+    assert_eq!(provider.requests.lock().unwrap().len(), 1);
+}
