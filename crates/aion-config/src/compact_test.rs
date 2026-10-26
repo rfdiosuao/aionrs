@@ -8,6 +8,7 @@ mod tests {
     fn default_values_match_spec() {
         let cfg = CompactConfig::default();
         assert_eq!(cfg.context_window, 200_000);
+        assert_eq!(cfg.request_byte_budget, 2 * 1024 * 1024);
         assert_eq!(cfg.output_reserve, 20_000);
         assert_eq!(cfg.autocompact_buffer, 13_000);
         assert_eq!(cfg.emergency_buffer, 3_000);
@@ -153,4 +154,13 @@ cache_diagnostics = true
         let cfg: CompactConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.autocompact_threshold_pct, None);
     }
+}
+
+#[test]
+fn request_byte_budget_can_be_lowered_or_disabled_independently_of_tokens() {
+    let limited: CompactConfig = toml::from_str("request_byte_budget = 1000000").unwrap();
+    assert_eq!(limited.request_byte_budget, 1000000);
+    assert_eq!(limited.context_window, 200000);
+    let disabled: CompactConfig = toml::from_str("request_byte_budget = 0").unwrap();
+    assert_eq!(disabled.request_byte_budget, 0);
 }

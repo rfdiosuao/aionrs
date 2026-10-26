@@ -16,6 +16,7 @@ use super::prompt::{
     COMPACT_MAX_OUTPUT_TOKENS, COMPACT_SYSTEM_PROMPT, build_compact_prompt, build_summary_content,
     format_compact_summary,
 };
+use super::request_budget::{omit_images, payload_bytes};
 use super::state::CompactState;
 
 /// Maximum number of prompt-too-long retries.
@@ -104,6 +105,7 @@ pub async fn autocompact(
     // Build messages for the compact LLM call: conversation + summary prompt
     let prompt = build_compact_prompt();
     let mut conv_messages = messages.to_vec();
+    omit_images(&mut conv_messages, None);
     conv_messages.push(Message::new(Role::User, vec![ContentBlock::Text { text: prompt }]));
 
     let mut ptl_attempts = 0u32;
@@ -119,7 +121,14 @@ pub async fn autocompact(
             reasoning_effort: None,
         };
 
-        match provider.stream(&request).await {
+        let response = if config.request_byte_budget > 0 && payload_bytes(&request) > config.request_byte_budget {
+            Err(ProviderError::PromptTooLong(
+                "Compaction input exceeds configured request byte budget".into(),
+            ))
+        } else {
+            provider.stream(&request).await
+        };
+        match response {
             Ok(rx) => match collect_stream_text(rx).await {
                 Ok((text, _usage)) => break text,
                 Err(e) => {
@@ -127,7 +136,9 @@ pub async fn autocompact(
                     return Err(e);
                 }
             },
-            Err(ProviderError::PromptTooLong(_)) if ptl_attempts < MAX_PTL_RETRIES => {
+            Err(ProviderError::PromptTooLong(_) | ProviderError::Api { status: 413, .. })
+                if ptl_attempts < MAX_PTL_RETRIES =>
+            {
                 ptl_attempts += 1;
                 // Remove the summary prompt (last msg), truncate, re-add prompt
                 let conversation_part = &conv_messages[..conv_messages.len() - 1];
@@ -147,7 +158,7 @@ pub async fn autocompact(
                     }
                 }
             }
-            Err(ProviderError::PromptTooLong(_)) => {
+            Err(ProviderError::PromptTooLong(_) | ProviderError::Api { status: 413, .. }) => {
                 state.record_failure();
                 return Err(CompactError::PromptTooLong { attempts: ptl_attempts });
             }

@@ -1,3 +1,6 @@
+#[path = "engine_request.rs"]
+mod request;
+use crate::compact::request_budget::{omit_images, payload_bytes};
 use std::mem::replace;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +40,7 @@ use aion_config::hooks::HookEngine;
 use aion_protocol::ToolApprovalManager;
 use aion_protocol::events::ToolCategory;
 use aion_protocol::writer::ProtocolEmitter;
+use aion_providers::ProviderError;
 use aion_providers::provider::{LlmProvider, create_provider};
 use aion_tools::registry::ToolRegistry;
 use aion_types::llm::{LlmEvent, LlmRequest, ThinkingConfig};
@@ -667,6 +671,9 @@ impl AgentEngine {
                 }],
             ));
         }
+        if self.current_turn_id.is_some() {
+            omit_images(&mut messages, self.current_turn_id.as_deref());
+        }
         project_image_input(&mut messages, image_input, &self.model);
 
         LlmRequest {
@@ -881,8 +888,7 @@ impl AgentEngine {
             // On the first model turn context_tokens is 0 so neither
             // autocompact nor emergency will fire.
             self.run_compaction().await?;
-            let request = self.build_request(kind);
-            let mut rx = self.provider.stream(&request).await?;
+            let mut rx = self.stream_with_request_recovery(kind).await?;
             let outcome = self.consume_stream(&mut rx).await?;
             let has_provider_usage = self.record_turn_usage(&outcome.usage);
             if !has_provider_usage {
@@ -1128,6 +1134,10 @@ impl AgentEngine {
     /// After a successful autocompact the emergency check is skipped
     /// because the context has been significantly reduced.
     async fn run_compaction(&mut self) -> Result<(), AgentError> {
+        self.run_compaction_with_force(false).await
+    }
+
+    async fn run_compaction_with_force(&mut self, force: bool) -> Result<(), AgentError> {
         // 1. Microcompact (lightweight, no LLM call)
         if should_microcompact(&self.messages, &self.compact_config) {
             let result = microcompact(&mut self.messages, &self.compact_config);
@@ -1144,9 +1154,12 @@ impl AgentEngine {
 
         // 2. Autocompact (LLM summarization)
         let mut compacted = false;
-        let should_compact = should_autocompact(self.compact_state.last_input_tokens, &self.compact_config);
+        let byte_limit = self.compact_config.request_byte_budget;
+        let byte_pressure = byte_limit > 0 && payload_bytes(&self.build_request(TurnKind::Normal)) > byte_limit;
+        let should_compact = should_autocompact(self.compact_state.last_input_tokens, &self.compact_config)
+            || (self.compact_config.enabled && (byte_pressure || force));
         if should_compact {
-            info!(target: "aion_agent", context_tokens = self.compact_state.last_input_tokens, "context compaction triggered");
+            info!(target: "aion_agent", context_tokens = self.compact_state.last_input_tokens, request_byte_pressure = byte_pressure, forced = force, "context compaction triggered");
             let threshold = if let Some(pct) = self.compact_config.autocompact_threshold_pct {
                 let t = self.compact_config.context_window * pct as usize / 100;
                 self.output.emit_info(&format!(
@@ -1164,7 +1177,7 @@ impl AgentEngine {
         }
         if should_compact && !self.compact_state.is_circuit_broken(&self.compact_config) {
             let provider = Arc::clone(&self.provider);
-            let mut compact_messages = self.messages.clone();
+            let (mut compact_messages, current) = self.compaction_input()?;
             project_image_input(&mut compact_messages, self.compat.image_input(), &self.model);
             match autocompact(
                 provider.as_ref(),
@@ -1181,6 +1194,7 @@ impl AgentEngine {
                         result.messages_summarized, result.pre_compact_tokens
                     ));
                     self.messages = result.messages;
+                    self.messages.extend(current);
                     self.context_state.record_compact();
                     self.refresh_local_context_estimate();
                     self.save_session();
@@ -1217,6 +1231,12 @@ impl AgentEngine {
             }
         }
 
+        if force && !compacted {
+            return Err(ProviderError::PromptTooLong(
+                "Context compaction did not complete; no automatic request replay was made".into(),
+            )
+            .into());
+        }
         // 3. Emergency check (skip if autocompact just succeeded)
         if !compacted && is_at_emergency_limit(self.compact_state.last_input_tokens, &self.compact_config) {
             return Err(AgentError::ContextTooLong {
@@ -1667,3 +1687,7 @@ fn parse_command_input(input: &str) -> Option<ParsedSlashCommand<'_>> {
 #[cfg(test)]
 #[path = "engine_test.rs"]
 mod engine_test;
+
+#[cfg(test)]
+#[path = "engine_request_budget_test.rs"]
+mod engine_request_budget_test;
