@@ -230,7 +230,16 @@ fn truncate_for_retry(messages: &[Message]) -> Option<Vec<Message>> {
         return None;
     }
 
-    let drop_count = (messages.len() / 5).max(1);
+    let mut drop_count = (messages.len() / 5).max(1);
+    // Dropping a tool-use message must not leave its result at the request head.
+    while drop_count < messages.len()
+        && messages[drop_count]
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
+    {
+        drop_count += 1;
+    }
     if drop_count >= messages.len() {
         return None;
     }
