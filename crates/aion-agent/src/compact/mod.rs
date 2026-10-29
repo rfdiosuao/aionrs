@@ -10,4 +10,5 @@ pub mod emergency;
 pub mod estimate;
 pub mod micro;
 pub mod prompt;
+pub(crate) mod request_budget;
 pub mod state;

@@ -10,6 +10,11 @@ pub struct CompactConfig {
     #[serde(default = "default_context_window")]
     pub context_window: usize,
 
+    /// Conservative serialized content byte budget, independent of token usage.
+    /// Zero disables this preflight; actual provider wire overhead can differ.
+    #[serde(default = "default_request_byte_budget")]
+    pub request_byte_budget: usize,
+
     /// Tokens reserved for output generation.
     /// Subtracted from `context_window` to get the effective input budget.
     #[serde(default = "default_output_reserve")]
@@ -71,6 +76,7 @@ impl Default for CompactConfig {
     fn default() -> Self {
         Self {
             context_window: default_context_window(),
+            request_byte_budget: default_request_byte_budget(),
             output_reserve: default_output_reserve(),
             autocompact_buffer: default_autocompact_buffer(),
             emergency_buffer: default_emergency_buffer(),
@@ -89,6 +95,9 @@ impl Default for CompactConfig {
 
 // --- Default value functions ---
 
+fn default_request_byte_budget() -> usize {
+    2 * 1024 * 1024
+}
 fn default_context_window() -> usize {
     200_000
 }

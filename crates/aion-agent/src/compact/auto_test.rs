@@ -233,3 +233,65 @@ mod tests {
         assert!(extract_compact_metadata(&msg).is_none());
     }
 }
+
+#[test]
+fn oversized_summary_retry_never_starts_with_an_orphan_tool_result() {
+    let tool = |id: &str| {
+        Message::new(
+            Role::Assistant,
+            vec![ContentBlock::ToolUse {
+                id: id.into(),
+                name: "Read".into(),
+                input: serde_json::json!({}),
+                extra: None,
+            }],
+        )
+    };
+    let result = |id: &str| {
+        Message::new(
+            Role::User,
+            vec![ContentBlock::ToolResult {
+                tool_use_id: id.into(),
+                content: "output".into(),
+                is_error: false,
+            }],
+        )
+    };
+    let messages = vec![
+        tool("old"),
+        result("old"),
+        tool("kept"),
+        result("kept"),
+        Message::new(
+            Role::User,
+            vec![ContentBlock::Text {
+                text: "exact pending task".into(),
+            }],
+        ),
+    ];
+    let shortened = truncate_for_retry(&messages).unwrap();
+    assert!(
+        !shortened[0]
+            .content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+    );
+    assert!(shortened.iter().any(|m| {
+        m.content
+            .iter()
+            .any(|b| matches!(b,ContentBlock::ToolUse{id,..} if id=="kept"))
+    }));
+    assert!(shortened.iter().any(|m| {
+        m.content
+            .iter()
+            .any(|b| matches!(b,ContentBlock::ToolResult{tool_use_id,..} if tool_use_id=="kept"))
+    }));
+    assert!(
+        shortened
+            .last()
+            .unwrap()
+            .content
+            .iter()
+            .any(|b| matches!(b,ContentBlock::Text{text} if text=="exact pending task"))
+    );
+}
