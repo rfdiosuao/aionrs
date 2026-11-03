@@ -14,7 +14,7 @@ mod phase7_tests {
 
     #[test]
     fn tc_7_40_build_tool_registry_unrestricted_registers_all() {
-        let registry = build_tool_registry(&ToolPolicy::Unrestricted, &std::env::temp_dir(), &[]);
+        let registry = build_tool_registry(&ToolPolicy::Unrestricted, &std::env::temp_dir(), &[], None);
         for name in &["Read", "Write", "Edit", "ExecCommand", "Grep", "Glob"] {
             assert!(registry.get(name).is_some(), "tool '{name}' should be registered");
         }
@@ -23,7 +23,7 @@ mod phase7_tests {
     #[test]
     fn tc_7_43_build_tool_registry_filters_to_policy() {
         let policy = ToolPolicy::allow_only(["ExecCommand", "Read"]);
-        let registry = build_tool_registry(&policy, &std::env::temp_dir(), &[]);
+        let registry = build_tool_registry(&policy, &std::env::temp_dir(), &[], None);
         assert!(registry.get("ExecCommand").is_some());
         assert!(registry.get("Read").is_some());
         assert!(registry.get("Write").is_none());

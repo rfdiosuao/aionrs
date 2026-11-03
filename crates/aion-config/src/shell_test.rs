@@ -28,6 +28,15 @@ mod tests {
     }
 
     #[test]
+    fn windows_shell_prompt_distinguishes_powershell_editions() {
+        let legacy = ResolvedShell::new(ShellKind::PowerShell, PathBuf::from("powershell.exe"));
+        let modern = ResolvedShell::new(ShellKind::PowerShell, PathBuf::from("pwsh.exe"));
+        assert!(render_shell_prompt(&legacy).contains("Windows PowerShell 5.1"));
+        assert!(render_shell_prompt(&legacy).contains("do not use && or ||"));
+        assert!(render_shell_prompt(&modern).contains("PowerShell 7 or later"));
+    }
+
+    #[test]
     fn derive_exec_args_uses_shell_specific_flags() {
         let bash = ResolvedShell::new(ShellKind::Bash, PathBuf::from("/bin/bash"));
         assert_eq!(bash.derive_exec_args("echo ok", false), vec!["-c", "echo ok"]);

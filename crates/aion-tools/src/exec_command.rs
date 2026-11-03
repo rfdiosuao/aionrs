@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use aion_config::shell::{resolve_shell, shell_command_builder};
+use aion_config::shell::{ResolvedShell, resolve_shell, shell_command_builder};
 use aion_process::CommandRunner;
 use aion_protocol::events::ToolCategory;
 use aion_types::tool::{JsonSchema, ToolResult};
@@ -18,6 +18,7 @@ const MAX_TIMEOUT_MS: u64 = 600_000;
 pub struct ExecCommandTool {
     cwd: PathBuf,
     runtime_env: HashMap<String, String>,
+    default_shell: Option<ResolvedShell>,
 }
 
 impl ExecCommandTool {
@@ -25,6 +26,7 @@ impl ExecCommandTool {
         Self {
             cwd,
             runtime_env: HashMap::new(),
+            default_shell: None,
         }
     }
 
@@ -32,7 +34,14 @@ impl ExecCommandTool {
         Self {
             cwd,
             runtime_env: runtime_env.into_iter().collect(),
+            default_shell: None,
         }
+    }
+
+    /// Use the same default shell as the session's system prompt.
+    pub fn with_default_shell(mut self, shell: ResolvedShell) -> Self {
+        self.default_shell = Some(shell);
+        self
     }
 }
 
@@ -64,8 +73,8 @@ impl Tool for ExecCommandTool {
          - Write files: use Write (not echo or cat with heredoc)\n\n\
          # Instructions\n\
          - Use absolute paths to avoid working directory confusion.\n\
-         - When issuing multiple independent commands, make parallel tool calls \
-         instead of chaining them. Use `&&` only when commands depend on each other.\n\
+         - Run independent commands separately. For dependent steps, use the selected shell's syntax. \
+         Windows PowerShell 5.1 does not support `&&` or `||`; check `$?` explicitly or use separate calls.\n\
          - You may specify an optional timeout in milliseconds (default 120000, max 600000).\n\n\
          # Git safety\n\
          - Never force push, reset --hard, or use --no-verify unless explicitly asked.\n\
@@ -82,7 +91,7 @@ impl Tool for ExecCommandTool {
                 },
                 "shell": {
                     "type": "string",
-                    "description": "Optional shell override: auto, powershell, pwsh, cmd, bash, zsh, sh, or an executable path"
+                    "description": "Omit to use the session default. Overrides: auto (platform default), powershell (Windows PowerShell on Windows), pwsh, cmd, bash, zsh, sh, or an executable path."
                 },
                 "timeout": {
                     "type": "integer",
@@ -105,7 +114,12 @@ impl Tool for ExecCommandTool {
             };
         };
 
-        let shell = match resolve_shell(input["shell"].as_str()) {
+        let requested = input["shell"].as_str().map(str::trim).filter(|shell| !shell.is_empty());
+        let resolved = match (requested, &self.default_shell) {
+            (None, Some(shell)) => Ok(shell.clone()),
+            _ => resolve_shell(requested),
+        };
+        let shell = match resolved {
             Ok(shell) => shell,
             Err(err) => {
                 return ToolResult {
