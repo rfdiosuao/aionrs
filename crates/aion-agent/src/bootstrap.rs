@@ -152,7 +152,7 @@ impl AgentBootstrap {
         let workspace = self.resolve_workspace_path();
         let provider = self.resolve_provider();
         let environment = self.resolve_environment(workspace)?;
-        let mut registry = self.build_builtin_registry(&environment.workspace);
+        let mut registry = self.build_builtin_registry(&environment);
 
         let builtin_names = registry.tool_names();
         let mcp = self.connect_mcp(&mut registry, &builtin_names).await;
@@ -160,7 +160,7 @@ impl AgentBootstrap {
         let skills = self.load_skills(&environment.workspace, mcp.manager.as_deref()).await;
         let prompt_usage = self.configure_system_prompt(&environment, &skills);
 
-        self.register_agent_tools(&mut registry, &provider, &environment.workspace, skills);
+        self.register_agent_tools(&mut registry, &provider, &environment, skills);
         let plan_active_flag = self.register_plan_tools(&mut registry);
         self.register_tool_search(&mut registry);
 
@@ -204,17 +204,18 @@ impl AgentBootstrap {
         self.provider.take().unwrap_or_else(|| create_provider(&self.config))
     }
 
-    fn build_builtin_registry(&self, workspace_path: &Path) -> ToolRegistry {
+    fn build_builtin_registry(&self, environment: &BootstrapEnvironment) -> ToolRegistry {
+        let workspace_path = &environment.workspace;
         let file_cache = self.build_file_cache();
         let mut registry = ToolRegistry::new();
 
         registry.register(Box::new(ReadTool::new(file_cache.clone())));
         registry.register(Box::new(WriteTool::new(file_cache.clone())));
         registry.register(Box::new(EditTool::new(file_cache)));
-        registry.register(Box::new(ExecCommandTool::new_with_env(
-            workspace_path.to_path_buf(),
-            self.runtime_env.clone(),
-        )));
+        registry.register(Box::new(
+            ExecCommandTool::new_with_env(workspace_path.clone(), self.runtime_env.clone())
+                .with_default_shell(environment.resolved_shell.clone()),
+        ));
         registry.register(Box::new(GrepTool::new(workspace_path.to_path_buf())));
         registry.register(Box::new(GlobTool::new(workspace_path.to_path_buf())));
         registry.register(Box::new(ViewImageTool::new()));
@@ -322,7 +323,7 @@ impl AgentBootstrap {
         &self,
         registry: &mut ToolRegistry,
         provider: &Arc<dyn LlmProvider>,
-        workspace: &Path,
+        environment: &BootstrapEnvironment,
         skills: Vec<SkillMetadata>,
     ) {
         let skill_checker = SkillPermissionChecker::new(
@@ -339,10 +340,11 @@ impl AgentBootstrap {
         let spawner = AgentSpawner::new_with_env(
             Arc::clone(provider),
             self.config.clone(),
-            workspace.to_path_buf(),
+            environment.workspace.clone(),
             self.runtime_env.clone(),
             self.tool_policy.clone(),
-        );
+        )
+        .with_default_shell(environment.resolved_shell.clone());
         registry.register(Box::new(SpawnTool::new(Arc::new(spawner))));
     }
 

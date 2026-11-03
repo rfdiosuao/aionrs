@@ -74,6 +74,52 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_configured_shell_reads_edits_and_executes_in_workspace() {
+        let workspace = tempfile::Builder::new().prefix("Lom 中文 ").tempdir().unwrap();
+        let file = workspace.path().join("test file.txt");
+        std::fs::write(&file, "before").unwrap();
+
+        let mut config = test_config();
+        config.shell.default = "PowerShell.exe".into();
+        let bootstrap = AgentBootstrap::new(config, workspace.path().to_string_lossy(), Arc::new(NullSink));
+        let environment = bootstrap.resolve_environment(workspace.path().to_path_buf()).unwrap();
+        let tools = bootstrap.build_builtin_registry(&environment);
+        let read = tools.get("Read").unwrap().execute(json!({"file_path": file})).await;
+        assert!(!read.is_error && read.content.contains("before"), "{}", read.content);
+        let edit = tools
+            .get("Edit")
+            .unwrap()
+            .execute(json!({
+                "file_path": file, "old_string": "before", "new_string": "after"
+            }))
+            .await;
+        assert!(!edit.is_error, "{}", edit.content);
+
+        let exec = tools.get("ExecCommand").unwrap();
+        let result = exec.execute(json!({
+            "cmd": "if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) { exit 42 }; Get-Content -LiteralPath './test file.txt'"
+        })).await;
+        assert!(
+            !result.is_error && result.content.contains("after"),
+            "{}",
+            result.content
+        );
+
+        let failed = exec
+            .execute(json!({
+                "cmd": "Write-Error 'expected failure'; if ($?) { Set-Content 'unexpected.txt' 'bad' } else { exit 17 }"
+            }))
+            .await;
+        assert!(
+            failed.is_error && failed.content.contains("Exit code: 17"),
+            "{}",
+            failed.content
+        );
+        assert!(!workspace.path().join("unexpected.txt").exists());
+    }
+
     #[test]
     fn mcp_servers_with_runtime_env_uses_server_env_as_override() {
         let mut config = test_config();

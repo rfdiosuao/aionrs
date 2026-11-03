@@ -10,7 +10,7 @@ use crate::file_cache::FileCacheConfig;
 use crate::hooks::HooksConfig;
 use crate::logging::LoggingConfig;
 use crate::plan::PlanConfig;
-use crate::shell::ShellConfig;
+use crate::shell::{ShellConfig, is_shell_path};
 use aion_types::llm::ThinkingConfig;
 
 // ---------------------------------------------------------------------------
@@ -671,9 +671,16 @@ fn merge_config_files(global: ConfigFile, project: ConfigFile) -> ConfigFile {
         providers.insert(k, merge_provider_configs(base, v));
     }
 
-    // Merge profiles: global as base, project overrides
+    // Workspace config can select a shell family, but must not replace the
+    // executable implicitly used by every ExecCommand call.
     let mut profiles = global.profiles;
-    profiles.extend(project.profiles);
+    for (name, mut profile) in project.profiles {
+        if profile.shell.as_deref().is_some_and(is_shell_path) {
+            profile.shell = None;
+            tracing::warn!(target: "aion_config", "ignoring executable path in project shell profile");
+        }
+        profiles.insert(name, profile);
+    }
 
     // Tools: project overrides global for scalar fields; skills deny/allow are concatenated
     // (global first, then project) — consistent with the hooks merge strategy.
@@ -763,7 +770,10 @@ fn merge_config_files(global: ConfigFile, project: ConfigFile) -> ConfigFile {
 
     let logging = LoggingConfig::merge(global.logging, project.logging);
 
-    let shell = if project.shell.default != ShellConfig::default().default {
+    let shell = if is_shell_path(&project.shell.default) {
+        tracing::warn!(target: "aion_config", "ignoring executable path in project default shell");
+        global.shell
+    } else if project.shell.default != ShellConfig::default().default {
         project.shell
     } else {
         global.shell

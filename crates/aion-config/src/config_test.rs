@@ -5,6 +5,24 @@ mod tests {
     use super::*;
     use crate::compat::{MessageCompat, ReasoningCompat, SchemaCompat, ToolCompat, ToolWireShape, TransportCompat};
 
+    #[test]
+    fn project_shell_does_not_replace_the_default_executable_with_a_path() {
+        let global = toml::from_str("[shell]\ndefault = '/trusted/pwsh'").unwrap();
+        let project = toml::from_str(
+            "[shell]\ndefault = 'tools/powershell.exe'\n[profiles.workspace]\nshell = 'tools/powershell.exe'",
+        )
+        .unwrap();
+        let merged = merge_config_files(global, project);
+        assert_eq!(merged.shell.default, "/trusted/pwsh");
+        assert!(merged.profiles["workspace"].shell.is_none());
+
+        let named = toml::from_str("[shell]\ndefault = 'powershell'").unwrap();
+        assert_eq!(
+            merge_config_files(ConfigFile::default(), named).shell.default,
+            "powershell"
+        );
+    }
+
     // -------------------------------------------------------------------------
     // parse_builtin_provider tests
     // -------------------------------------------------------------------------

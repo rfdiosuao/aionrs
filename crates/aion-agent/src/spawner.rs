@@ -4,6 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use aion_config::config::Config;
+use aion_config::shell::ResolvedShell;
 use aion_providers::LlmProvider;
 use aion_tools::edit::EditTool;
 use aion_tools::exec_command::ExecCommandTool;
@@ -36,6 +37,7 @@ pub struct AgentSpawner {
     base_config: Config,
     cwd: PathBuf,
     runtime_env: Vec<(String, String)>,
+    default_shell: Option<ResolvedShell>,
     tool_policy: ToolPolicy,
 }
 
@@ -56,8 +58,14 @@ impl AgentSpawner {
             base_config: config,
             cwd,
             runtime_env,
+            default_shell: None,
             tool_policy,
         }
+    }
+
+    pub(crate) fn with_default_shell(mut self, shell: ResolvedShell) -> Self {
+        self.default_shell = Some(shell);
+        self
     }
 
     /// Spawn a single sub-agent and wait for result.
@@ -74,7 +82,7 @@ impl AgentSpawner {
         tracing::info!(target: "aion_agent", cwd = %self.cwd.display(), "sub-agent spawned with workspace cwd");
 
         let child_policy = effective_child_tool_policy(&self.tool_policy, &[]);
-        let tools = build_tool_registry(&child_policy, &self.cwd, &self.runtime_env);
+        let tools = build_tool_registry(&child_policy, &self.cwd, &self.runtime_env, self.default_shell.as_ref());
         let output: Arc<dyn OutputSink> = Arc::new(NullSink);
         let mut engine = AgentEngine::new_with_provider_and_env(
             self.provider.clone(),
@@ -136,6 +144,7 @@ impl AgentSpawner {
             base_config: self.base_config.clone(),
             cwd: self.cwd.clone(),
             runtime_env: self.runtime_env.clone(),
+            default_shell: self.default_shell.clone(),
             tool_policy: self.tool_policy.clone(),
         }
     }
@@ -157,7 +166,7 @@ impl Spawner for AgentSpawner {
         }
 
         let child_policy = effective_child_tool_policy(&self.tool_policy, &overrides.allowed_tools);
-        let tools = build_tool_registry(&child_policy, &self.cwd, &self.runtime_env);
+        let tools = build_tool_registry(&child_policy, &self.cwd, &self.runtime_env, self.default_shell.as_ref());
         let output: Arc<dyn OutputSink> = Arc::new(NullSink);
         let mut engine = AgentEngine::new_with_provider_and_env(
             self.provider.clone(),
@@ -202,15 +211,21 @@ fn effective_child_tool_policy(parent: &ToolPolicy, allowed_tools: &[String]) ->
     )
 }
 
-fn build_tool_registry(policy: &ToolPolicy, cwd: &Path, runtime_env: &[(String, String)]) -> ToolRegistry {
+fn build_tool_registry(
+    policy: &ToolPolicy,
+    cwd: &Path,
+    runtime_env: &[(String, String)],
+    default_shell: Option<&ResolvedShell>,
+) -> ToolRegistry {
+    let mut exec = ExecCommandTool::new_with_env(cwd.to_path_buf(), runtime_env.to_vec());
+    if let Some(shell) = default_shell {
+        exec = exec.with_default_shell(shell.clone());
+    }
     let all_tools: Vec<(&str, Box<dyn aion_tools::Tool>)> = vec![
         ("Read", Box::new(ReadTool::new(None))),
         ("Write", Box::new(WriteTool::new(None))),
         ("Edit", Box::new(EditTool::new(None))),
-        (
-            "ExecCommand",
-            Box::new(ExecCommandTool::new_with_env(cwd.to_path_buf(), runtime_env.to_vec())),
-        ),
+        ("ExecCommand", Box::new(exec)),
         ("Grep", Box::new(GrepTool::new(cwd.to_path_buf()))),
         ("Glob", Box::new(GlobTool::new(cwd.to_path_buf()))),
     ];

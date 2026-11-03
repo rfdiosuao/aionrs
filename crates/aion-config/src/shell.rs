@@ -110,8 +110,10 @@ pub fn resolve_shell(requested: Option<&str>) -> Result<ResolvedShell, ShellErro
         return Ok(default_shell());
     }
 
-    if let Some(kind) = shell_kind_from_alias(requested) {
-        return resolve_kind(kind, Some(requested)).ok_or_else(|| {
+    let alias = requested.to_ascii_lowercase();
+    let alias = alias.strip_suffix(".exe").unwrap_or(&alias);
+    if let Some(kind) = shell_kind_from_alias(alias) {
+        return resolve_kind(kind, Some(alias)).ok_or_else(|| {
             tracing::warn!(
                 target: "aion_config::shell",
                 requested_shell = requested,
@@ -123,7 +125,7 @@ pub fn resolve_shell(requested: Option<&str>) -> Result<ResolvedShell, ShellErro
     }
 
     let path = PathBuf::from(requested);
-    if path.components().count() > 1 || path.is_absolute() || requested.contains('\\') {
+    if is_shell_path(requested) {
         let kind = detect_shell_kind(&path).ok_or_else(|| ShellError::UnsupportedShell(requested.to_string()))?;
         if !path.is_file() {
             return Err(ShellError::PathUnavailable(requested.to_string()));
@@ -132,6 +134,11 @@ pub fn resolve_shell(requested: Option<&str>) -> Result<ResolvedShell, ShellErro
     }
 
     Err(ShellError::UnsupportedShell(requested.to_string()))
+}
+
+pub(crate) fn is_shell_path(requested: &str) -> bool {
+    let path = Path::new(requested.trim());
+    path.components().count() > 1 || path.is_absolute() || requested.contains(['/', '\\'])
 }
 
 pub fn default_shell() -> ResolvedShell {
@@ -168,8 +175,21 @@ pub async fn shell_command(command_str: &str) -> std::io::Result<Output> {
 }
 
 pub fn render_shell_prompt(shell: &ResolvedShell) -> String {
+    let guidance = match shell.kind {
+        ShellKind::PowerShell
+            if shell
+                .path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.eq_ignore_ascii_case("powershell")) =>
+        {
+            "\nUse Windows PowerShell 5.1 syntax: do not use && or ||. Use separate calls or check $? explicitly for dependent steps."
+        }
+        ShellKind::PowerShell => "\nUse PowerShell syntax. The && and || operators require PowerShell 7 or later.",
+        _ => "",
+    };
     format!(
-        "Default shell: {}\nShell path: {}\nShell syntax: {}",
+        "Default shell: {}\nShell path: {}\nShell syntax: {}{guidance}",
         shell.kind.name(),
         shell.path.display(),
         shell.kind.syntax_label()
@@ -222,6 +242,9 @@ fn resolve_kind(kind: ShellKind, requested: Option<&str>) -> Option<ResolvedShel
             vec![PathBuf::from(path)]
         }
         (ShellKind::PowerShell, Some("pwsh"), _) => candidate_paths("pwsh", pwsh_fallback_paths()),
+        (ShellKind::PowerShell, Some("powershell"), _) if cfg!(windows) => {
+            candidate_paths("powershell", powershell_fallback_paths())
+        }
         (ShellKind::PowerShell, _, _) => {
             let mut paths = candidate_paths("pwsh", pwsh_fallback_paths());
             paths.extend(candidate_paths("powershell", powershell_fallback_paths()));
