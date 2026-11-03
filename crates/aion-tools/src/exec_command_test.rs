@@ -187,7 +187,11 @@ mod tests {
     #[tokio::test]
     async fn windows_explicit_pwsh_override_supports_pipeline_chains() {
         // PowerShell 7 is optional on user machines and required by the Windows CI job.
-        if resolve_shell(Some("pwsh")).is_err() {
+        if let Err(error) = resolve_shell(Some("pwsh")) {
+            assert!(
+                std::env::var_os("AION_TEST_REQUIRE_PWSH").is_none(),
+                "CI requires a resolvable PowerShell 7: {error}"
+            );
             return;
         }
         let legacy = resolve_shell(Some("powershell")).unwrap();
