@@ -125,7 +125,7 @@ pub fn resolve_shell(requested: Option<&str>) -> Result<ResolvedShell, ShellErro
     }
 
     let path = PathBuf::from(requested);
-    if path.components().count() > 1 || path.is_absolute() || requested.contains('\\') {
+    if is_shell_path(requested) {
         let kind = detect_shell_kind(&path).ok_or_else(|| ShellError::UnsupportedShell(requested.to_string()))?;
         if !path.is_file() {
             return Err(ShellError::PathUnavailable(requested.to_string()));
@@ -134,6 +134,11 @@ pub fn resolve_shell(requested: Option<&str>) -> Result<ResolvedShell, ShellErro
     }
 
     Err(ShellError::UnsupportedShell(requested.to_string()))
+}
+
+pub(crate) fn is_shell_path(requested: &str) -> bool {
+    let path = Path::new(requested.trim());
+    path.components().count() > 1 || path.is_absolute() || requested.contains(['/', '\\'])
 }
 
 pub fn default_shell() -> ResolvedShell {

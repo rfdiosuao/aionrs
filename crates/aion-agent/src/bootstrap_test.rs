@@ -83,7 +83,7 @@ mod tests {
 
         let mut config = test_config();
         config.shell.default = "PowerShell.exe".into();
-        let bootstrap = AgentBootstrap::new(config, workspace.path(), Arc::new(NullSink));
+        let bootstrap = AgentBootstrap::new(config, workspace.path().to_string_lossy(), Arc::new(NullSink));
         let environment = bootstrap.resolve_environment(workspace.path().to_path_buf()).unwrap();
         let tools = bootstrap.build_builtin_registry(&environment);
         let read = tools.get("Read").unwrap().execute(json!({"file_path": file})).await;
